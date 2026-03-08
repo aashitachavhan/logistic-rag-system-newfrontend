@@ -14,7 +14,8 @@ import {
   Loader2,
   Sparkles,
   ChevronDown,
-  Trash2
+  Trash2,
+  AlertTriangle
 } from 'lucide-react'
 import axios from 'axios'
 
@@ -26,9 +27,23 @@ interface Message {
   timestamp: Date
 }
 
+interface UploadResponse {
+  filename: string
+  is_logistics_document: boolean
+  message: string
+}
+
+interface DocumentMetadata {
+  filename: string
+  upload_time: string
+  is_logistics_document: boolean
+}
+
 interface Document {
   name: string
   status: 'uploaded' | 'processing' | 'ready'
+  isLogisticsDocument?: boolean
+  uploadTime?: string
 }
 
 // API Base URL
@@ -50,6 +65,7 @@ export default function Home() {
   const [dragActive, setDragActive] = useState(false)
   const [documents, setDocuments] = useState<Document[]>([])
   const [uploadSuccess, setUploadSuccess] = useState(false)
+  const [uploadValidation, setUploadValidation] = useState<UploadResponse | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -58,12 +74,34 @@ export default function Home() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
+  // Fetch documents from MongoDB on mount
+  useEffect(() => {
+    const fetchDocuments = async () => {
+      try {
+        const response = await axios.get(`${API_URL}/documents`)
+        if (response.data && response.data.documents) {
+          const fetchedDocs: Document[] = response.data.documents.map((doc: DocumentMetadata) => ({
+            name: doc.filename,
+            status: 'ready',
+            isLogisticsDocument: doc.is_logistics_document,
+            uploadTime: doc.upload_time
+          }))
+          setDocuments(fetchedDocs)
+        }
+      } catch (error) {
+        console.error('Error fetching documents:', error)
+      }
+    }
+    fetchDocuments()
+  }, [])
+
   // Handle file upload
   const handleFileUpload = async (file: File) => {
     if (!file) return
     
     setIsUploading(true)
     setUploadSuccess(false)
+    setUploadValidation(null)
     
     // Add document to list
     const newDoc: Document = {
@@ -76,20 +114,30 @@ export default function Home() {
       const formData = new FormData()
       formData.append('file', file)
       
-      await axios.post(`${API_URL}/upload`, formData, {
+      const response = await axios.post<UploadResponse>(`${API_URL}/upload`, formData, {
         headers: {
           'Content-Type': 'multipart/form-data'
         }
       })
       
-      // Update document status
+      // Update document status with validation result
       setDocuments(prev => prev.map(doc => 
-        doc.name === file.name ? { ...doc, status: 'ready' } : doc
+        doc.name === file.name ? { 
+          ...doc, 
+          status: 'ready',
+          isLogisticsDocument: response.data.is_logistics_document
+        } : doc
       ))
+      
+      // Set validation message to display
+      setUploadValidation(response.data)
       setUploadSuccess(true)
       
-      // Clear success message after 3 seconds
-      setTimeout(() => setUploadSuccess(false), 3000)
+      // Clear success message after 5 seconds
+      setTimeout(() => {
+        setUploadSuccess(false)
+        setUploadValidation(null)
+      }, 5000)
       
     } catch (error) {
       console.error('Upload error:', error)
@@ -250,17 +298,34 @@ export default function Home() {
                 )}
               </div>
               
-              {/* Upload Success Message */}
+              {/* Upload Success & Validation Message */}
               <AnimatePresence>
-                {uploadSuccess && (
+                {uploadSuccess && uploadValidation && (
                   <motion.div
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0 }}
-                    className="mt-4 p-3 bg-green-500/10 border border-green-500/20 rounded-lg flex items-center gap-2"
+                    className={`mt-4 p-3 rounded-lg flex items-center gap-2 ${
+                      uploadValidation.is_logistics_document
+                        ? 'bg-green-500/10 border border-green-500/20'
+                        : 'bg-yellow-500/10 border border-yellow-500/20'
+                    }`}
                   >
-                    <CheckCircle className="w-5 h-5 text-green-400" />
-                    <span className="text-green-400 text-sm">Document processed successfully!</span>
+                    {uploadValidation.is_logistics_document ? (
+                      <>
+                        <CheckCircle className="w-5 h-5 text-green-400" />
+                        <span className="text-green-400 text-sm">
+                          ✓ Logistics document detected
+                        </span>
+                      </>
+                    ) : (
+                      <>
+                        <AlertTriangle className="w-5 h-5 text-yellow-400" />
+                        <span className="text-yellow-400 text-sm">
+                          ⚠ This might not be a logistics document
+                        </span>
+                      </>
+                    )}
                   </motion.div>
                 )}
               </AnimatePresence>
@@ -289,24 +354,43 @@ export default function Home() {
                       key={index}
                       initial={{ opacity: 0, x: -10 }}
                       animate={{ opacity: 1, x: 0 }}
-                      className="flex items-center justify-between p-3 bg-slate-800/50 rounded-lg"
+                      className="p-3 bg-slate-800/50 rounded-lg space-y-2"
                     >
-                      <div className="flex items-center gap-3 min-w-0">
-                        <FileText className="w-5 h-5 text-slate-400 flex-shrink-0" />
-                        <span className="text-sm text-white truncate">{doc.name}</span>
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <FileText className="w-5 h-5 text-slate-400 flex-shrink-0" />
+                          <span className="text-sm text-white truncate">{doc.name}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {doc.status === 'processing' ? (
+                            <Loader2 className="w-4 h-4 text-amber-400 animate-spin" />
+                          ) : doc.isLogisticsDocument ? (
+                            <div className="flex items-center gap-1 text-green-400" title="Logistics document">
+                              <CheckCircle className="w-4 h-4" />
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-1 text-yellow-400" title="Not a logistics document">
+                              <AlertTriangle className="w-4 h-4" />
+                            </div>
+                          )}
+                          <button
+                            onClick={() => removeDocument(doc.name)}
+                            className="p-1 hover:bg-slate-700 rounded transition-colors"
+                          >
+                            <Trash2 className="w-4 h-4 text-slate-400 hover:text-red-400" />
+                          </button>
+                        </div>
                       </div>
-                      <div className="flex items-center gap-2">
-                        {doc.status === 'processing' ? (
-                          <Loader2 className="w-4 h-4 text-amber-400 animate-spin" />
-                        ) : (
-                          <CheckCircle className="w-4 h-4 text-green-400" />
+                      {/* Upload time and validation status */}
+                      <div className="flex items-center gap-2 text-xs text-slate-500 pl-8">
+                        {doc.uploadTime && (
+                          <span>{new Date(doc.uploadTime).toLocaleString()}</span>
                         )}
-                        <button
-                          onClick={() => removeDocument(doc.name)}
-                          className="p-1 hover:bg-slate-700 rounded transition-colors"
-                        >
-                          <Trash2 className="w-4 h-4 text-slate-400 hover:text-red-400" />
-                        </button>
+                        {doc.status === 'ready' && (
+                          <span className={doc.isLogisticsDocument ? 'text-green-400' : 'text-yellow-400'}>
+                            {doc.isLogisticsDocument ? '✓ Logistics document' : '⚠ Not a logistics document'}
+                          </span>
+                        )}
                       </div>
                     </motion.li>
                   ))}
@@ -362,7 +446,7 @@ export default function Home() {
                           ? 'bg-gradient-to-br from-cyan-500 to-blue-600 text-white'
                           : 'bg-slate-700/50 text-slate-100'
                       }`}>
-                        <p className="whitespace-pre-wrap">{message.content}</p>
+                        <p className={`whitespace-pre-wrap ${message.role === 'assistant' ? 'leading-relaxed break-words' : ''}`}>{message.content}</p>
                         <span className={`text-xs mt-1 block ${message.role === 'user' ? 'text-white/60' : 'text-slate-500'}`}>
                           {message.timestamp.toLocaleTimeString('en-US', { hour12: false })}
                         </span>
