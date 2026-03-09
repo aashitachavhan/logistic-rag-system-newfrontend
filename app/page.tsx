@@ -33,6 +33,11 @@ interface UploadResponse {
   message: string
 }
 
+interface ChatRequest {
+  question: string
+  document?: string
+}
+
 interface DocumentMetadata {
   filename: string
   upload_time: string
@@ -66,6 +71,7 @@ export default function Home() {
   const [documents, setDocuments] = useState<Document[]>([])
   const [uploadSuccess, setUploadSuccess] = useState(false)
   const [uploadValidation, setUploadValidation] = useState<UploadResponse | null>(null)
+  const [selectedDocument, setSelectedDocument] = useState<string>("")
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -87,13 +93,16 @@ export default function Home() {
             uploadTime: doc.upload_time
           }))
           setDocuments(fetchedDocs)
+          if (fetchedDocs.length > 0 && !selectedDocument) {
+            setSelectedDocument(fetchedDocs[0].name)
+          }
         }
       } catch (error) {
         console.error('Error fetching documents:', error)
       }
     }
     fetchDocuments()
-  }, [])
+  }, [selectedDocument])
 
   // Handle file upload
   const handleFileUpload = async (file: File) => {
@@ -187,7 +196,8 @@ export default function Home() {
     
     try {
       const response = await axios.post(`${API_URL}/chat`, {
-        question: userMessage.content
+        question: userMessage.content,
+        document: selectedDocument
       })
       
       const assistantMessage: Message = {
@@ -213,8 +223,17 @@ export default function Home() {
   }
 
   // Remove document
-  const removeDocument = (name: string) => {
-    setDocuments(prev => prev.filter(doc => doc.name !== name))
+  const removeDocument = async (name: string) => {
+    try {
+      await axios.delete(`${API_URL}/documents/${name}`)
+      setDocuments(prev => prev.filter(doc => doc.name !== name))
+      if (selectedDocument === name) {
+        const remaining = documents.filter(doc => doc.name !== name)
+        setSelectedDocument(remaining.length > 0 ? remaining[0].name : "")
+      }
+    } catch (error) {
+      console.error('Error deleting document:', error)
+    }
   }
 
   return (
@@ -482,6 +501,28 @@ export default function Home() {
               
               {/* Input Area */}
               <div className="p-4 border-t border-slate-700/50">
+                {/* Document Selector */}
+                {documents.length > 0 && (
+                  <div className="mb-4">
+                    <label className="block text-sm font-medium text-slate-300 mb-2">
+                      Selected Document:
+                    </label>
+                    <div className="relative">
+                      <select
+                        value={selectedDocument}
+                        onChange={(e) => setSelectedDocument(e.target.value)}
+                        className="appearance-none w-full px-4 py-2 bg-slate-800/50 border border-slate-600 rounded-lg text-white focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 transition-all"
+                      >
+                        {documents.map((doc) => (
+                          <option key={doc.name} value={doc.name}>
+                            {doc.name}
+                          </option>
+                        ))}
+                      </select>
+                      <ChevronDown className="absolute right-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
+                    </div>
+                  </div>
+                )}
                 <form onSubmit={handleSubmit} className="flex gap-3">
                   <div className="relative flex-1">
                     <input
