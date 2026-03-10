@@ -9,33 +9,33 @@ import {
   Send, 
   Bot, 
   User, 
-  X, 
-  CheckCircle,
-  Loader2,
-  Sparkles,
+  ChevronUp,
   ChevronDown,
   Trash2,
-  AlertTriangle
+  AlertTriangle,
+  CheckCircle,
+  Loader2
 } from 'lucide-react'
 import axios from 'axios'
 
 // Types
+interface Source {
+  document: string
+  page: number
+}
+
 interface Message {
   id: string
   role: 'user' | 'assistant'
   content: string
   timestamp: Date
+  sources?: Source[]
 }
 
 interface UploadResponse {
   filename: string
   is_logistics_document: boolean
   message: string
-}
-
-interface ChatRequest {
-  question: string
-  document?: string
 }
 
 interface DocumentMetadata {
@@ -49,6 +49,13 @@ interface Document {
   status: 'uploaded' | 'processing' | 'ready'
   isLogisticsDocument?: boolean
   uploadTime?: string
+}
+
+interface ChatSession {
+  id: string
+  session_title: string
+  created_at: string
+  messages: Message[]
 }
 
 // API Base URL
@@ -72,6 +79,17 @@ export default function Home() {
   const [uploadSuccess, setUploadSuccess] = useState(false)
   const [uploadValidation, setUploadValidation] = useState<UploadResponse | null>(null)
   const [selectedDocument, setSelectedDocument] = useState<string>("")
+  const [sessions, setSessions] = useState<ChatSession[]>([])
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null)
+  
+  // Collapsible sections state
+  const [sectionsOpen, setSectionsOpen] = useState({
+    newChat: true,
+    upload: true,
+    documents: true,
+    history: true
+  })
+
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -102,7 +120,78 @@ export default function Home() {
       }
     }
     fetchDocuments()
-  }, [selectedDocument])
+  }, [])
+
+  // Fetch chat sessions
+  useEffect(() => {
+    const fetchSessions = async () => {
+      try {
+        const response = await axios.get(`${API_URL}/chat/sessions`)
+        setSessions(response.data)
+      } catch (error) {
+        console.error('Error fetching sessions:', error)
+      }
+    }
+    fetchSessions()
+  }, [])
+
+  // Create new session
+  const createNewSession = async () => {
+    try {
+      const title = selectedDocument || "General Chat"
+      const response = await axios.post(`${API_URL}/chat/create-session`, { session_title: title })
+      const sessionId = response.data.session_id
+      setCurrentSessionId(sessionId)
+      setMessages([{
+        id: '1',
+        role: 'assistant',
+        content: 'Hello! I\'m your logistics document assistant. Upload your documents and I\'ll help you find answers from them.',
+        timestamp: new Date()
+      }])
+      const sessionsResponse = await axios.get(`${API_URL}/chat/sessions`)
+      setSessions(sessionsResponse.data)
+    } catch (error) {
+      console.error('Error creating session:', error)
+    }
+  }
+
+  // Load session
+  const loadSession = async (sessionId: string) => {
+    try {
+      const response = await axios.get(`${API_URL}/chat/session/${sessionId}`)
+      const session = response.data
+      setCurrentSessionId(sessionId)
+      const loadedMessages: Message[] = session.messages.map((msg: any, index: number) => ({
+        id: (index + 1).toString(),
+        role: msg.role,
+        content: msg.content,
+        timestamp: new Date(),
+        sources: msg.sources
+      }))
+      setMessages(loadedMessages)
+    } catch (error) {
+      console.error('Error loading session:', error)
+    }
+  }
+
+  // Delete session
+  const deleteSession = async (sessionId: string) => {
+    try {
+      await axios.delete(`${API_URL}/chat/session/${sessionId}`)
+      setSessions(prev => prev.filter(s => s.id !== sessionId))
+      if (currentSessionId === sessionId) {
+        setCurrentSessionId(null)
+        setMessages([{
+          id: '1',
+          role: 'assistant',
+          content: 'Hello! I\'m your logistics document assistant. Upload your documents and I\'ll help you find answers from them.',
+          timestamp: new Date()
+        }])
+      }
+    } catch (error) {
+      console.error('Error deleting session:', error)
+    }
+  }
 
   // Handle file upload
   const handleFileUpload = async (file: File) => {
@@ -112,7 +201,6 @@ export default function Home() {
     setUploadSuccess(false)
     setUploadValidation(null)
     
-    // Add document to list
     const newDoc: Document = {
       name: file.name,
       status: 'processing'
@@ -129,7 +217,6 @@ export default function Home() {
         }
       })
       
-      // Update document status with validation result
       setDocuments(prev => prev.map(doc => 
         doc.name === file.name ? { 
           ...doc, 
@@ -138,11 +225,9 @@ export default function Home() {
         } : doc
       ))
       
-      // Set validation message to display
       setUploadValidation(response.data)
       setUploadSuccess(true)
       
-      // Clear success message after 5 seconds
       setTimeout(() => {
         setUploadSuccess(false)
         setUploadValidation(null)
@@ -195,16 +280,25 @@ export default function Home() {
     setIsLoading(true)
     
     try {
-      const response = await axios.post(`${API_URL}/chat`, {
-        question: userMessage.content,
-        document: selectedDocument
-      })
+      let response
+      if (currentSessionId) {
+        response = await axios.post(`${API_URL}/chat/${currentSessionId}`, {
+          question: userMessage.content,
+          document: selectedDocument
+        })
+      } else {
+        response = await axios.post(`${API_URL}/chat`, {
+          question: userMessage.content,
+          document: selectedDocument
+        })
+      }
       
       const assistantMessage: Message = {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
         content: response.data.answer,
-        timestamp: new Date()
+        timestamp: new Date(),
+        sources: response.data.sources
       }
       
       setMessages(prev => [...prev, assistantMessage])
@@ -236,317 +330,375 @@ export default function Home() {
     }
   }
 
+  // Toggle section
+  const toggleSection = (section: keyof typeof sectionsOpen) => {
+    setSectionsOpen(prev => ({
+      ...prev,
+      [section]: !prev[section]
+    }))
+  }
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
-      {/* Header */}
-      <header className="glass-dark border-b border-slate-700/50 sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between h-16">
-            <div className="flex items-center gap-3">
-              <div className="p-2 bg-gradient-to-br from-cyan-500 to-blue-600 rounded-xl">
-                <Sparkles className="w-6 h-6 text-white" />
-              </div>
-              <div>
-                <h1 className="text-xl font-bold text-white">Logistics RAG</h1>
-                <p className="text-xs text-slate-400">Document Intelligence</p>
-              </div>
+    <div className="flex h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 overflow-hidden">
+      
+      {/* Left Sidebar */}
+      <div className="w-96 bg-slate-900/95 border-r border-slate-700/50 flex flex-col h-full">
+        
+        {/* Logo/Title */}
+        {/* Chat Header */}
+        <div className="p-4 border-b border-slate-700/50 bg-slate-900/50">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-gradient-to-br from-violet-500 to-purple-600 rounded-lg">
+              <Bot className="w-5 h-5 text-white" />
             </div>
-            
-            {/* Status Indicator */}
-            <div className="flex items-center gap-2">
-              <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
-              <span className="text-sm text-slate-400">API Connected</span>
+            <div>
+              <h2 className="text-lg font-semibold text-white">Logistics Assistant</h2>
+              <p className="text-xs text-slate-400">Ask about your documents</p>
             </div>
           </div>
         </div>
-      </header>
-
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        
+        {/* Scrollable Sidebar Content */}
+        <div className="flex-1 overflow-y-auto">
           
-          {/* Left Sidebar - Upload Section */}
-          <div className="lg:col-span-1 space-y-6">
-            {/* Upload Area */}
-            <motion.div 
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="glass-dark rounded-2xl p-6"
+          {/* New Chat Button */}
+          <div className="p-3">
+            <button
+              onClick={createNewSession}
+              className="w-full px-4 py-3 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-medium rounded-xl transition-all duration-300 flex items-center justify-center gap-2"
             >
-              <div className="flex items-center gap-2 mb-4">
+              <MessageSquare className="w-5 h-5" />
+              New Chat
+            </button>
+          </div>
+
+          {/* Upload Doc Section */}
+          <div className="px-3 pb-2">
+            <button
+              onClick={() => toggleSection('upload')}
+              className="w-full flex items-center justify-between p-3 bg-slate-800/50 hover:bg-slate-700/50 rounded-xl transition-colors"
+            >
+              <div className="flex items-center gap-2 text-white">
                 <Upload className="w-5 h-5 text-cyan-400" />
-                <h2 className="text-lg font-semibold text-white">Upload Documents</h2>
+                <span className="font-medium">Upload Doc</span>
               </div>
-              
-              <div
-                className={`
-                  relative border-2 border-dashed rounded-xl p-8 text-center transition-all duration-300
-                  ${dragActive 
-                    ? 'border-cyan-400 bg-cyan-500/10' 
-                    : 'border-slate-600 hover:border-slate-500'}
-                  ${isUploading ? 'pointer-events-none opacity-50' : 'cursor-pointer'}
-                `}
-                onDragEnter={handleDrag}
-                onDragLeave={handleDrag}
-                onDragOver={handleDrag}
-                onDrop={handleDrop}
-                onClick={() => fileInputRef.current?.click()}
-              >
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept=".pdf"
-                  className="hidden"
-                  onChange={(e) => e.target.files?.[0] && handleFileUpload(e.target.files[0])}
-                />
-                
-                {isUploading ? (
-                  <div className="flex flex-col items-center gap-3">
-                    <Loader2 className="w-10 h-10 text-cyan-400 animate-spin" />
-                    <p className="text-slate-300">Processing document...</p>
+              {sectionsOpen.upload ? (
+                <ChevronUp className="w-4 h-4 text-slate-400" />
+              ) : (
+                <ChevronDown className="w-4 h-4 text-slate-400" />
+              )}
+            </button>
+            
+            <AnimatePresence>
+              {sectionsOpen.upload && (
+                <motion.div
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: 'auto', opacity: 1 }}
+                  exit={{ height: 0, opacity: 0 }}
+                  className="overflow-hidden"
+                >
+                  <div
+                    className={`mt-2 border-2 border-dashed rounded-xl p-4 text-center transition-all duration-300 ${
+                      dragActive 
+                        ? 'border-cyan-400 bg-cyan-500/10' 
+                        : 'border-slate-600 hover:border-slate-500'
+                    } ${isUploading ? 'pointer-events-none opacity-50' : 'cursor-pointer'}`}
+                    onDragEnter={handleDrag}
+                    onDragLeave={handleDrag}
+                    onDragOver={handleDrag}
+                    onDrop={handleDrop}
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept=".pdf"
+                      className="hidden"
+                      onChange={(e) => e.target.files?.[0] && handleFileUpload(e.target.files[0])}
+                    />
+                    
+                    {isUploading ? (
+                      <div className="flex flex-col items-center gap-2">
+                        <Loader2 className="w-8 h-8 text-cyan-400 animate-spin" />
+                        <p className="text-slate-300 text-sm">Processing...</p>
+                      </div>
+                    ) : (
+                      <div className="flex flex-col items-center gap-2">
+                        <FileText className="w-8 h-8 text-slate-400" />
+                        <p className="text-white text-sm font-medium">Drop PDF here</p>
+                        <p className="text-slate-400 text-xs">or click to browse</p>
+                      </div>
+                    )}
                   </div>
-                ) : (
-                  <div className="flex flex-col items-center gap-3">
-                    <div className="p-4 bg-slate-700/50 rounded-full">
-                      <FileText className="w-8 h-8 text-slate-400" />
-                    </div>
-                    <div>
-                      <p className="text-white font-medium">Drop PDF here</p>
-                      <p className="text-sm text-slate-400">or click to browse</p>
-                    </div>
-                  </div>
-                )}
-              </div>
-              
-              {/* Upload Success & Validation Message */}
-              <AnimatePresence>
-                {uploadSuccess && uploadValidation && (
-                  <motion.div
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0 }}
-                    className={`mt-4 p-3 rounded-lg flex items-center gap-2 ${
+                  
+                  {/* Upload Success Message */}
+                  {uploadSuccess && uploadValidation && (
+                    <div className={`mt-2 p-2 rounded-lg flex items-center gap-2 ${
                       uploadValidation.is_logistics_document
                         ? 'bg-green-500/10 border border-green-500/20'
                         : 'bg-yellow-500/10 border border-yellow-500/20'
-                    }`}
-                  >
-                    {uploadValidation.is_logistics_document ? (
-                      <>
-                        <CheckCircle className="w-5 h-5 text-green-400" />
-                        <span className="text-green-400 text-sm">
-                          ✓ Logistics document detected
-                        </span>
-                      </>
-                    ) : (
-                      <>
-                        <AlertTriangle className="w-5 h-5 text-yellow-400" />
-                        <span className="text-yellow-400 text-sm">
-                          ⚠ This might not be a logistics document
-                        </span>
-                      </>
-                    )}
-                  </motion.div>
-                )}
-              </AnimatePresence>
-            </motion.div>
-            
-            {/* Documents List */}
-            <motion.div 
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.1 }}
-              className="glass-dark rounded-2xl p-6"
+                    }`}>
+                      {uploadValidation.is_logistics_document ? (
+                        <>
+                          <CheckCircle className="w-4 h-4 text-green-400" />
+                          <span className="text-green-400 text-xs">Logistics document</span>
+                        </>
+                      ) : (
+                        <>
+                          <AlertTriangle className="w-4 h-4 text-yellow-400" />
+                          <span className="text-yellow-400 text-xs">Not logistics doc</span>
+                        </>
+                      )}
+                    </div>
+                  )}
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+
+          {/* Documents Section */}
+          <div className="px-3 pb-2">
+            <button
+              onClick={() => toggleSection('documents')}
+              className="w-full flex items-center justify-between p-3 bg-slate-800/50 hover:bg-slate-700/50 rounded-xl transition-colors"
             >
-              <div className="flex items-center gap-2 mb-4">
+              <div className="flex items-center gap-2 text-white">
                 <FileText className="w-5 h-5 text-purple-400" />
-                <h2 className="text-lg font-semibold text-white">Documents</h2>
+                <span className="font-medium">Documents</span>
               </div>
-              
-              {documents.length === 0 ? (
-                <p className="text-slate-400 text-sm text-center py-4">
-                  No documents uploaded yet
-                </p>
+              {sectionsOpen.documents ? (
+                <ChevronUp className="w-4 h-4 text-slate-400" />
               ) : (
-                <ul className="space-y-3">
-                  {documents.map((doc, index) => (
-                    <motion.li
-                      key={index}
-                      initial={{ opacity: 0, x: -10 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      className="p-3 bg-slate-800/50 rounded-lg space-y-2"
-                    >
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-3 min-w-0">
-                          <FileText className="w-5 h-5 text-slate-400 flex-shrink-0" />
-                          <span className="text-sm text-white truncate">{doc.name}</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          {doc.status === 'processing' ? (
-                            <Loader2 className="w-4 h-4 text-amber-400 animate-spin" />
-                          ) : doc.isLogisticsDocument ? (
-                            <div className="flex items-center gap-1 text-green-400" title="Logistics document">
-                              <CheckCircle className="w-4 h-4" />
-                            </div>
-                          ) : (
-                            <div className="flex items-center gap-1 text-yellow-400" title="Not a logistics document">
-                              <AlertTriangle className="w-4 h-4" />
-                            </div>
-                          )}
+                <ChevronDown className="w-4 h-4 text-slate-400" />
+              )}
+            </button>
+            
+            <AnimatePresence>
+              {sectionsOpen.documents && (
+                <motion.div
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: 'auto', opacity: 1 }}
+                  exit={{ height: 0, opacity: 0 }}
+                  className="overflow-hidden"
+                >
+                  <div className="mt-2 space-y-2">
+                    {documents.length === 0 ? (
+                      <p className="text-slate-400 text-sm text-center py-2">No documents</p>
+                    ) : (
+                      documents.map((doc, index) => (
+                        <div
+                          key={index}
+                          onClick={() => setSelectedDocument(doc.name)}
+                          className={`p-2 rounded-lg cursor-pointer flex items-center justify-between ${
+                            selectedDocument === doc.name 
+                              ? 'bg-cyan-500/20 border border-cyan-500/30' 
+                              : 'bg-slate-800/50 hover:bg-slate-700/50'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2 min-w-0">
+                            <FileText className="w-4 h-4 text-slate-400 flex-shrink-0" />
+                            <span className={`text-sm truncate ${selectedDocument === doc.name ? 'text-cyan-400' : 'text-white'}`}>
+                              {doc.name}
+                            </span>
+                          </div>
                           <button
-                            onClick={() => removeDocument(doc.name)}
-                            className="p-1 hover:bg-slate-700 rounded transition-colors"
+                            onClick={(e) => { e.stopPropagation(); removeDocument(doc.name); }}
+                            className="p-1 hover:bg-slate-600 rounded flex-shrink-0"
                           >
-                            <Trash2 className="w-4 h-4 text-slate-400 hover:text-red-400" />
+                            <Trash2 className="w-3 h-3 text-slate-400 hover:text-red-400" />
                           </button>
                         </div>
-                      </div>
-                      {/* Upload time and validation status */}
-                      <div className="flex items-center gap-2 text-xs text-slate-500 pl-8">
-                        {doc.uploadTime && (
-                          <span>{new Date(doc.uploadTime).toLocaleString()}</span>
-                        )}
-                        {doc.status === 'ready' && (
-                          <span className={doc.isLogisticsDocument ? 'text-green-400' : 'text-yellow-400'}>
-                            {doc.isLogisticsDocument ? '✓ Logistics document' : '⚠ Not a logistics document'}
-                          </span>
-                        )}
-                      </div>
-                    </motion.li>
-                  ))}
-                </ul>
+                      ))
+                    )}
+                  </div>
+                </motion.div>
               )}
-            </motion.div>
+            </AnimatePresence>
+          </div>
+
+          {/* History Section */}
+          <div className="px-3 pb-3">
+            <button
+              onClick={() => toggleSection('history')}
+              className="w-full flex items-center justify-between p-3 bg-slate-800/50 hover:bg-slate-700/50 rounded-xl transition-colors"
+            >
+              <div className="flex items-center gap-2 text-white">
+                <MessageSquare className="w-5 h-5 text-green-400" />
+                <span className="font-medium">History</span>
+              </div>
+              {sectionsOpen.history ? (
+                <ChevronUp className="w-4 h-4 text-slate-400" />
+              ) : (
+                <ChevronDown className="w-4 h-4 text-slate-400" />
+              )}
+            </button>
+            
+            <AnimatePresence>
+              {sectionsOpen.history && (
+                <motion.div
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: 'auto', opacity: 1 }}
+                  exit={{ height: 0, opacity: 0 }}
+                  className="overflow-hidden"
+                >
+                  <div className="mt-2 space-y-2">
+                    {sessions.length === 0 ? (
+                      <p className="text-slate-400 text-sm text-center py-2">No sessions</p>
+                    ) : (
+                      sessions.map((session) => (
+                        <div
+                          key={session.id}
+                          className="p-2 bg-slate-800/50 hover:bg-slate-700/50 rounded-lg flex items-center justify-between cursor-pointer"
+                          onClick={() => loadSession(session.id)}
+                        >
+                          <span className="text-sm text-white truncate">{session.session_title}</span>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); deleteSession(session.id); }}
+                            className="p-1 hover:bg-slate-600 rounded flex-shrink-0"
+                          >
+                            <Trash2 className="w-3 h-3 text-slate-400 hover:text-red-400" />
+                          </button>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
           
-          {/* Right Section - Chat Interface */}
-          <div className="lg:col-span-2">
-            <motion.div 
-              initial={{ opacity: 0, y: 20 }}
+        </div>
+      </div>
+      
+      {/* Right Chat Area */}
+      <div className="flex-1 flex flex-col h-full">
+        
+        {/* Chat Header */}
+        <div className="p-4 border-b border-slate-700/50 bg-slate-900/50">
+          <div className="flex items-center gap-3 h-11">
+            {/* <div className="p-2 bg-gradient-to-br from-violet-500 to-purple-600 rounded-lg">
+              <Bot className="w-5 h-5 text-white" />
+            </div>
+            <div>
+              <h2 className="text-lg font-semibold text-white">Logistics Assistant</h2>
+              <p className="text-xs text-slate-400">Ask about your documents</p>
+            </div> */}
+          </div>
+        </div>
+        
+        {/* Messages Area - Takes remaining space */}
+        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          {messages.map((message) => (
+            <motion.div
+              key={message.id}
+              initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.2 }}
-              className="glass-dark rounded-2xl h-[calc(100vh-180px)] flex flex-col"
+              className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
             >
-              {/* Chat Header */}
-              <div className="p-4 border-b border-slate-700/50">
-                <div className="flex items-center gap-3">
-                  <div className="p-2 bg-gradient-to-br from-violet-500 to-purple-600 rounded-lg">
-                    <MessageSquare className="w-5 h-5 text-white" />
-                  </div>
-                  <div>
-                    <h2 className="text-lg font-semibold text-white">AI Assistant</h2>
-                    <p className="text-xs text-slate-400">Ask questions about your documents</p>
+              <div className={`flex gap-3 max-w-[80%] ${message.role === 'user' ? 'flex-row-reverse' : ''}`}>
+                <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${
+                  message.role === 'user' 
+                    ? 'bg-gradient-to-br from-cyan-500 to-blue-600' 
+                    : 'bg-gradient-to-br from-violet-500 to-purple-600'
+                }`}>
+                  {message.role === 'user' ? (
+                    <User className="w-4 h-4 text-white" />
+                  ) : (
+                    <Bot className="w-4 h-4 text-white" />
+                  )}
+                </div>
+                <div className={`rounded-2xl p-4 ${
+                  message.role === 'user'
+                    ? 'bg-gradient-to-br from-cyan-500 to-blue-600 text-white'
+                    : 'bg-slate-700/50 text-slate-100'
+                }`}>
+                  <p className="whitespace-pre-wrap leading-relaxed break-words">{message.content}</p>
+                  
+                  {message.sources && message.sources.length > 0 && (
+                    <div className="mt-3 pt-3 border-t border-slate-600">
+                      <p className="text-xs text-slate-400 mb-2">Sources:</p>
+                      <ul className="space-y-1">
+                        {message.sources.map((source, idx) => (
+                          <li key={idx} className="text-xs text-slate-300">
+                            Page {source.page} — {source.document}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  
+                  <span className={`text-xs mt-2 block ${message.role === 'user' ? 'text-white/60' : 'text-slate-500'}`}>
+                    {message.timestamp.toLocaleTimeString('en-US', { hour12: false })}
+                  </span>
+                </div>
+              </div>
+            </motion.div>
+          ))}
+          
+          {/* Typing Indicator */}
+          {isLoading && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              className="flex justify-start"
+            >
+              <div className="flex gap-3">
+                <div className="w-8 h-8 rounded-full bg-gradient-to-br from-violet-500 to-purple-600 flex items-center justify-center">
+                  <Bot className="w-4 h-4 text-white" />
+                </div>
+                <div className="bg-slate-700/50 rounded-2xl p-4">
+                  <div className="typing-indicator flex gap-1">
+                    <span className="w-2 h-2 bg-slate-400 rounded-full"></span>
+                    <span className="w-2 h-2 bg-slate-400 rounded-full"></span>
+                    <span className="w-2 h-2 bg-slate-400 rounded-full"></span>
                   </div>
                 </div>
               </div>
-              
-              {/* Messages Area */}
-              <div className="flex-1 overflow-y-auto p-4 space-y-4">
-                {messages.map((message) => (
-                  <motion.div
-                    key={message.id}
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
-                  >
-                    <div className={`flex gap-3 max-w-[80%] ${message.role === 'user' ? 'flex-row-reverse' : ''}`}>
-                      <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${
-                        message.role === 'user' 
-                          ? 'bg-gradient-to-br from-cyan-500 to-blue-600' 
-                          : 'bg-gradient-to-br from-violet-500 to-purple-600'
-                      }`}>
-                        {message.role === 'user' ? (
-                          <User className="w-4 h-4 text-white" />
-                        ) : (
-                          <Bot className="w-4 h-4 text-white" />
-                        )}
-                      </div>
-                      <div className={`chat-bubble rounded-2xl p-4 ${
-                        message.role === 'user'
-                          ? 'bg-gradient-to-br from-cyan-500 to-blue-600 text-white'
-                          : 'bg-slate-700/50 text-slate-100'
-                      }`}>
-                        <p className={`whitespace-pre-wrap ${message.role === 'assistant' ? 'leading-relaxed break-words' : ''}`}>{message.content}</p>
-                        <span className={`text-xs mt-1 block ${message.role === 'user' ? 'text-white/60' : 'text-slate-500'}`}>
-                          {message.timestamp.toLocaleTimeString('en-US', { hour12: false })}
-                        </span>
-                      </div>
-                    </div>
-                  </motion.div>
-                ))}
-                
-                {/* Typing Indicator */}
-                {isLoading && (
-                  <motion.div
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    className="flex justify-start"
-                  >
-                    <div className="flex gap-3">
-                      <div className="w-8 h-8 rounded-full bg-gradient-to-br from-violet-500 to-purple-600 flex items-center justify-center">
-                        <Bot className="w-4 h-4 text-white" />
-                      </div>
-                      <div className="bg-slate-700/50 rounded-2xl p-4">
-                        <div className="typing-indicator flex gap-1">
-                          <span className="w-2 h-2 bg-slate-400 rounded-full"></span>
-                          <span className="w-2 h-2 bg-slate-400 rounded-full"></span>
-                          <span className="w-2 h-2 bg-slate-400 rounded-full"></span>
-                        </div>
-                      </div>
-                    </div>
-                  </motion.div>
-                )}
-                
-                <div ref={messagesEndRef} />
-              </div>
-              
-              {/* Input Area */}
-              <div className="p-4 border-t border-slate-700/50">
-                {/* Document Selector */}
-                {documents.length > 0 && (
-                  <div className="mb-4">
-                    <label className="block text-sm font-medium text-slate-300 mb-2">
-                      Selected Document:
-                    </label>
-                    <div className="relative">
-                      <select
-                        value={selectedDocument}
-                        onChange={(e) => setSelectedDocument(e.target.value)}
-                        className="appearance-none w-full px-4 py-2 bg-slate-800/50 border border-slate-600 rounded-lg text-white focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 transition-all"
-                      >
-                        {documents.map((doc) => (
-                          <option key={doc.name} value={doc.name}>
-                            {doc.name}
-                          </option>
-                        ))}
-                      </select>
-                      <ChevronDown className="absolute right-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
-                    </div>
-                  </div>
-                )}
-                <form onSubmit={handleSubmit} className="flex gap-3">
-                  <div className="relative flex-1">
-                    <input
-                      type="text"
-                      value={input}
-                      onChange={(e) => setInput(e.target.value)}
-                      placeholder="Ask a question about your documents..."
-                      disabled={isLoading}
-                      className="w-full px-4 py-3 bg-slate-800/50 border border-slate-600 rounded-xl text-white placeholder-slate-400 focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 transition-all disabled:opacity-50"
-                    />
-                  </div>
-                  <button
-                    type="submit"
-                    disabled={!input.trim() || isLoading}
-                    className="px-6 py-3 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 disabled:from-slate-600 disabled:to-slate-700 text-white font-medium rounded-xl transition-all duration-300 disabled:cursor-not-allowed flex items-center gap-2"
-                  >
-                    <Send className="w-5 h-5" />
-                  </button>
-                </form>
-              </div>
             </motion.div>
-          </div>
+          )}
+          
+          <div ref={messagesEndRef} />
         </div>
-      </main>
+        
+        {/* Input Area - Always visible at bottom */}
+        <div className="p-4 border-t border-slate-700/50 bg-slate-900/50">
+          {/* Document Selector */}
+          {documents.length > 0 && (
+            <div className="mb-3">
+              <select
+                value={selectedDocument}
+                onChange={(e) => setSelectedDocument(e.target.value)}
+                className="w-full px-3 py-2 bg-slate-800/50 border border-slate-600 rounded-lg text-white text-sm focus:outline-none focus:border-cyan-500"
+              >
+                {documents.map((doc) => (
+                  <option key={doc.name} value={doc.name}>
+                    {doc.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+          
+          <form onSubmit={handleSubmit} className="flex gap-3">
+            <input
+              type="text"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder="Ask something about your logistics documents..."
+              disabled={isLoading}
+              className="flex-1 px-4 py-3 bg-slate-800/50 border border-slate-600 rounded-xl text-white placeholder-slate-400 focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 transition-all disabled:opacity-50"
+            />
+            <button
+              type="submit"
+              disabled={!input.trim() || isLoading}
+              className="px-5 py-3 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 disabled:from-slate-600 disabled:to-slate-700 text-white font-medium rounded-xl transition-all duration-300 disabled:cursor-not-allowed flex items-center gap-2"
+            >
+              <Send className="w-5 h-5" />
+            </button>
+          </form>
+        </div>
+      </div>
     </div>
   )
 }
+
